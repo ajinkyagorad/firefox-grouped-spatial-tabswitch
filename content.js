@@ -1,245 +1,159 @@
-let selectedGroupIndex = 0;
-let selectedTabIndex = 0;
-let groupedTabs = [];
+// 2D Spatial Tab Switcher
 let overlay = null;
+let tabs = [];
+let selectedIndex = 0;
+let groups = new Map();
 
-// Create and show the overlay
+// Create a minimal overlay
 function createOverlay() {
-  // Remove existing overlay if it exists
-  const existingOverlay = document.getElementById('tab-switcher-overlay');
-  if (existingOverlay) {
-    document.body.removeChild(existingOverlay);
-  }
-  
-  overlay = document.createElement('div');
-  overlay.id = 'tab-switcher-overlay';
-  overlay.innerHTML = `
-    <div class="overlay-bg"></div>
-    <div class="overlay-content">
-      <div class="tab-groups"></div>
-    </div>
-  `;
-  
-  document.body.appendChild(overlay);
-  
-  // Close on ESC
-  document.addEventListener('keydown', handleKeyDown);
-  
-  // Close when clicking on background
-  overlay.querySelector('.overlay-bg').addEventListener('click', closeOverlay);
-  
-  // Focus the overlay to ensure key events work
-  overlay.focus();
-}
+    if (overlay) return;
 
-// Render a single tab
-function renderTab(tab, groupIndex, tabIndex, isNested = false) {
-  return `
-    <div class="tab ${isNested ? 'nested-tab' : ''}" 
-         data-tab-id="${tab.id}" 
-         data-group-index="${groupIndex}" 
-         data-tab-index="${tabIndex}"
-         ${tab.active ? 'data-active' : ''}>
-      <div class="tab-favicon" style="background-image: url('${tab.favIconUrl || ''}')"></div>
-      <div class="tab-title">${tab.title || tab.url}</div>
-      ${isNested ? `<div class="tab-domain">${tab.domain}</div>` : ''}
-    </div>
-  `;
-}
-
-// Render a group of tabs
-function renderGroup(group, groupIndex, isNested = false) {
-  if (group.isCategory) {
-    return `
-      <div class="tab-group category-group" data-group-index="${groupIndex}">
-        <h3 class="group-title">${group.domain}</h3>
-        <div class="tabs-container">
-          ${group.groups.map((subgroup, subIndex) => 
-            `<div class="subgroup" data-subgroup-index="${subIndex}">
-              <h4 class="subgroup-title">${subgroup.domain}</h4>
-              <div class="tabs-container">
-                ${subgroup.tabs.map((tab, tabIndex) => 
-                  renderTab(tab, groupIndex, `${subIndex}-${tabIndex}`, true)
-                ).join('')}
-              </div>
-            </div>`
-          ).join('')}
-        </div>
-      </div>
+    overlay = document.createElement('div');
+    overlay.id = 'spatial-tab-switcher';
+    overlay.innerHTML = `
+        <div class="spatial-container"></div>
     `;
-  }
-  
-  return `
-    <div class="tab-group ${isNested ? 'nested-group' : ''}" data-group-index="${groupIndex}">
-      <h3 class="group-title">${group.domain}</h3>
-      <div class="tabs-container">
-        {group.tabs.map((tab, tabIndex) => 
-          renderTab(tab, groupIndex, tabIndex, isNested)
-        ).join('')}
-      </div>
-    </div>
-  `;
+    
+    document.documentElement.appendChild(overlay);
+    overlay.addEventListener('keydown', handleKeyDown);
+    overlay.tabIndex = -1;
+    
+    // Load tabs immediately
+    loadTabs();
+    
+    // Focus and show
+    setTimeout(() => {
+        overlay.classList.add('visible');
+        overlay.focus();
+    }, 10);
 }
 
-// Update the overlay with tab groups
-function updateOverlay(groups) {
-  if (!overlay) createOverlay();
-  
-  // Flatten the groups structure for easier navigation
-  groupedTabs = [];
-  const flattenedGroups = [];
-  
-  groups.forEach(group => {
-    if (group.isCategory) {
-      // For categories, add all nested tabs to the flattened structure
-      group.groups.forEach(subgroup => {
-        subgroup.tabs.forEach(tab => {
-          groupedTabs.push({
-            ...tab,
-            groupIndex: flattenedGroups.length,
-            tabIndex: groupedTabs.length
-          });
-        });
-      });
-      flattenedGroups.push(group);
-    } else {
-      // For regular groups, just add the tabs
-      group.tabs.forEach(tab => {
-        groupedTabs.push({
-          ...tab,
-          groupIndex: flattenedGroups.length,
-          tabIndex: groupedTabs.length
-        });
-      });
-      flattenedGroups.push(group);
+// Load tabs and group by domain
+async function loadTabs() {
+    try {
+        tabs = await browser.runtime.sendMessage({ action: 'getTabs' });
+        groupTabs();
+        renderGroups();
+    } catch (e) {
+        console.error('Error loading tabs:', e);
     }
-  });
-  
-  // Reset selection
-  selectedGroupIndex = 0;
-  selectedTabIndex = 0;
-  
-  // Render the groups
-  const groupsContainer = overlay.querySelector('.tab-groups');
-  groupsContainer.innerHTML = flattenedGroups.map((group, idx) => 
-    renderGroup(group, idx)
-  ).join('');
-  
-  updateSelection();
 }
 
-// Update the selected tab visually
-function updateSelection() {
-  // Remove all selected states
-  document.querySelectorAll('.tab').forEach(tab => {
-    tab.classList.remove('selected');
-  });
-  
-  // Add selected state to current tab
-  const selectedTab = document.querySelector(`.tab[data-group-index="${selectedGroupIndex}"][data-tab-index="${selectedTabIndex}"]`);
-  if (selectedTab) {
-    selectedTab.classList.add('selected');
-    selectedTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }
+// Group tabs by domain
+function groupTabs() {
+    groups.clear();
+    tabs.forEach(tab => {
+        try {
+            const domain = new URL(tab.url).hostname.replace('www.', '');
+            if (!groups.has(domain)) {
+                groups.set(domain, []);
+            }
+            groups.get(domain).push(tab);
+        } catch (e) {
+            // Skip invalid URLs
+        }
+    });
+}
+
+// Render tab groups in 2D space
+function renderGroups() {
+    if (!overlay) return;
+    
+    const container = overlay.querySelector('.spatial-container');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    // Position groups in a circle
+    const groupArray = Array.from(groups.entries());
+    const centerX = window.innerWidth / 2;
+    const centerY = window.innerHeight / 2;
+    const radius = Math.min(centerX, centerY) * 0.7;
+    
+    groupArray.forEach(([domain, tabs], i) => {
+        const angle = (i / groupArray.length) * Math.PI * 2;
+        const x = centerX + Math.cos(angle) * radius - 100;
+        const y = centerY + Math.sin(angle) * radius - 100;
+        
+        const groupEl = document.createElement('div');
+        groupEl.className = 'tab-group';
+        groupEl.style.left = `${x}px`;
+        groupEl.style.top = `${y}px`;
+        
+        // Add domain label
+        const domainEl = document.createElement('div');
+        domainEl.className = 'domain-label';
+        domainEl.textContent = domain;
+        groupEl.appendChild(domainEl);
+        
+        // Position tabs in a smaller circle around the group center
+        tabs.forEach((tab, tabIndex) => {
+            const tabAngle = (tabIndex / tabs.length) * Math.PI * 2;
+            const tabX = 50 + Math.cos(tabAngle) * 30;
+            const tabY = 50 + Math.sin(tabAngle) * 30;
+            
+            const tabEl = document.createElement('div');
+            tabEl.className = `tab ${tab.active ? 'active' : ''}`;
+            tabEl.style.left = `${tabX}px`;
+            tabEl.style.top = `${tabY}px`;
+            tabEl.title = tab.title;
+            
+            // Add favicon or first letter as fallback
+            if (tab.favIconUrl) {
+                const favicon = document.createElement('img');
+                favicon.src = tab.favIconUrl;
+                favicon.className = 'tab-favicon';
+                tabEl.appendChild(favicon);
+            } else {
+                tabEl.textContent = tab.title ? tab.title[0].toUpperCase() : '?';
+            }
+            
+            tabEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                browser.runtime.sendMessage({
+                    action: 'switchTab',
+                    tabId: tab.id
+                });
+                closeOverlay();
+            });
+            
+            groupEl.appendChild(tabEl);
+        });
+        
+        container.appendChild(groupEl);
+    });
 }
 
 // Handle keyboard navigation
 function handleKeyDown(e) {
-  if (!overlay) return;
-  
-  const groupCount = groupedTabs.length;
-  const tabCount = groupCount > 0 ? groupedTabs[selectedGroupIndex].tabs.length : 0;
-  
-  switch(e.key) {
-    case 'Escape':
-      closeOverlay();
-      break;
-      
-    case 'ArrowLeft':
-      e.preventDefault();
-      selectedTabIndex = (selectedTabIndex - 1 + tabCount) % tabCount;
-      updateSelection();
-      break;
-      
-    case 'ArrowRight':
-      e.preventDefault();
-      selectedTabIndex = (selectedTabIndex + 1) % tabCount;
-      updateSelection();
-      break;
-      
-    case 'ArrowUp':
-      e.preventDefault();
-      selectedGroupIndex = (selectedGroupIndex - 1 + groupCount) % groupCount;
-      selectedTabIndex = Math.min(selectedTabIndex, groupedTabs[selectedGroupIndex].tabs.length - 1);
-      updateSelection();
-      break;
-      
-    case 'ArrowDown':
-      e.preventDefault();
-      selectedGroupIndex = (selectedGroupIndex + 1) % groupCount;
-      selectedTabIndex = Math.min(selectedTabIndex, groupedTabs[selectedGroupIndex].tabs.length - 1);
-      updateSelection();
-      break;
-      
-    case 'Enter':
-      e.preventDefault();
-      const tab = groupedTabs[selectedGroupIndex].tabs[selectedTabIndex];
-      if (tab) {
-        browser.tabs.update(tab.id, { active: true });
+    if (e.key === 'Escape') {
+        e.preventDefault();
         closeOverlay();
-      }
-      break;
-  }
+    }
+    // Add more navigation as needed
 }
 
 // Close the overlay
 function closeOverlay() {
-  if (overlay) {
-    document.removeEventListener('keydown', handleKeyDown);
-    overlay.remove();
-    overlay = null;
-  }
-}
-
-// Handle tab clicks
-function handleTabClick(e) {
-  const tabElement = e.target.closest('.tab');
-  if (tabElement) {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const groupIndex = parseInt(tabElement.dataset.groupIndex);
-    const tabIndex = parseInt(tabElement.dataset.tabIndex);
-    const tab = groupedTabs[groupIndex]?.tabs[tabIndex];
-    
-    if (tab) {
-      // Update the active tab in the background script
-      browser.runtime.sendMessage({
-        action: 'switchTab',
-        tabId: tab.id
-      }).then(closeOverlay);
+    if (overlay && overlay.parentNode) {
+        overlay.remove();
+        overlay = null;
+        browser.runtime.sendMessage({ action: 'overlayClosed' });
     }
-  }
 }
-
-// Add event delegation for tab clicks
-document.addEventListener('click', handleTabClick, true);
 
 // Listen for messages from background script
 browser.runtime.onMessage.addListener((message) => {
-  if (message.action === 'showOverlay') {
-    if (overlay) {
-      closeOverlay();
-      setTimeout(() => updateOverlay(message.tabs), 100);
-    } else {
-      updateOverlay(message.tabs);
+    if (message.action === 'showOverlay') {
+        createOverlay();
+    } else if (message.action === 'hideOverlay') {
+        closeOverlay();
     }
-  }
 });
 
-// Close overlay when switching tabs
-browser.tabs.onActivated.addListener(() => {
-  if (overlay) {
-    closeOverlay();
-  }
+// Close overlay when clicking outside
+document.addEventListener('click', (e) => {
+    if (overlay && !overlay.contains(e.target)) {
+        closeOverlay();
+    }
 });

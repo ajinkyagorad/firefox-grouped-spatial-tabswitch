@@ -2,42 +2,33 @@
   "manifest_version": 2,
   "name": "Spatial Tab Switcher",
   "version": "1.0",
-  "description": "A 2D grid tab switcher with domain grouping",
+  "description": "Minimal 2D spatial tab switcher",
+  
   "permissions": [
     "tabs",
-    "activeTab",
-    "storage",
     "<all_urls>"
   ],
+  
   "background": {
     "scripts": ["background.js"],
-    "persistent": false
+    "persistent": true
   },
+  
   "commands": {
     "toggle-tab-switcher": {
       "suggested_key": {
         "default": "Ctrl+Shift+Space"
       },
-      "description": "Toggle tab switcher overlay"
-    },
-    "next-tab": {
-      "suggested_key": {
-        "default": "Ctrl+Alt+Right"
-      },
-      "description": "Switch to next tab in group"
-    },
-    "prev-tab": {
-      "suggested_key": {
-        "default": "Ctrl+Alt+Left"
-      },
-      "description": "Switch to previous tab in group"
+      "description": "Toggle tab switcher"
     }
   },
+  
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "css": ["overlay.css"]
+      "css": ["overlay.css"],
+      "run_at": "document_end"
     }
   ]
 }

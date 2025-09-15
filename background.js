@@ -49,91 +49,91 @@ async function getGroupedTabs() {
   const groups = new Map();
   
   for (const tab of tabs) {
-    let domain = 'Misc';
-    try {
-      const url = new URL(tab.url);
-      domain = url.hostname.startsWith('www.') ? 
-        url.hostname.substring(4) : url.hostname;
-    } catch (e) {
-      // Keep 'Misc' for invalid URLs
+    const domain = categorizeDomain(new URL(tab.url).hostname);
+    if (!groups.has(domain)) {
+      groups.set(domain, []);
     }
-    
-    const category = categorizeDomain(domain);
-    
-    if (!groups.has(category)) {
-      groups.set(category, new Map());
-    }
-    
-    if (!groups.get(category).has(domain)) {
-      groups.get(category).set(domain, []);
-    }
-    
-    groups.get(category).get(domain).push({
+    groups.get(domain).push({
       id: tab.id,
       title: tab.title,
       url: tab.url,
       favIconUrl: tab.favIconUrl,
-      active: tab.active,
-      domain: domain
+      active: tab.active
     });
   }
   
-  // Convert to array of {category, groups} objects
-  return Array.from(groups.entries()).map(([category, domainMap]) => {
-    const domains = Array.from(domainMap.entries()).map(([domain, tabs]) => ({
-      domain,
-      tabs
-    }));
-    
-    // If a category has only one domain with few tabs, flatten it
-    if (domains.length === 1 && domains[0].tabs.length <= 3) {
-      return {
-        domain: category,
-        tabs: domains[0].tabs,
-        isFlattened: true
-      };
-    }
-    
-    return {
-      domain: category,
-      groups: domains,
-      isCategory: true
-    };
-  });
+  return Array.from(groups, ([domain, tabs]) => ({ domain, tabs }));
 }
 
-// Send message to content script to show overlay
-async function showOverlay() {
+// Track overlay state
+let isOverlayVisible = false;
+let activeTabId = null;
+
+// Toggle overlay
+async function toggleOverlay() {
   const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-  if (tabs.length > 0) {
-    browser.tabs.sendMessage(tabs[0].id, { 
-      action: 'showOverlay',
-      tabs: await getGroupedTabs()
-    });
+  if (tabs.length === 0) return;
+  
+  const tab = tabs[0];
+  
+  if (isOverlayVisible) {
+    // Hide overlay
+    try {
+      await browser.tabs.sendMessage(tab.id, { action: 'hideOverlay' });
+      isOverlayVisible = false;
+      activeTabId = null;
+    } catch (e) {
+      console.log('Could not hide overlay:', e);
+    }
+  } else {
+    // Show overlay
+    try {
+      await browser.tabs.sendMessage(tab.id, { action: 'showOverlay' });
+      isOverlayVisible = true;
+      activeTabId = tab.id;
+    } catch (e) {
+      console.log('Failed to show overlay, trying to inject content script...');
+      try {
+        await browser.tabs.executeScript(tab.id, { file: 'content.js' });
+        await browser.tabs.insertCSS(tab.id, { file: 'overlay.css' });
+        await browser.tabs.sendMessage(tab.id, { action: 'showOverlay' });
+        isOverlayVisible = true;
+        activeTabId = tab.id;
+      } catch (injectError) {
+        console.error('Failed to inject content script:', injectError);
+      }
+    }
   }
 }
+
+// Handle keyboard shortcut
+browser.commands.onCommand.addListener((command) => {
+  if (command === 'toggle-tab-switcher') {
+    toggleOverlay().catch(console.error);
+  }
+});
 
 // Handle messages from content script
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'switchTab') {
     browser.tabs.update(message.tabId, { active: true });
     return Promise.resolve({ success: true });
+  } else if (message.action === 'getTabs') {
+    return browser.tabs.query({ currentWindow: true });
+  } else if (message.action === 'overlayClosed') {
+    isOverlayVisible = false;
+    activeTabId = null;
+    return Promise.resolve({ success: true });
+  }
+  return Promise.resolve({ success: false });
+});
+
+// Clean up when tab is closed
+browser.tabs.onRemoved.addListener((tabId) => {
+  if (tabId === activeTabId) {
+    isOverlayVisible = false;
+    activeTabId = null;
   }
 });
 
-// Handle keyboard shortcuts
-browser.commands.onCommand.addListener(async (command) => {
-  if (command === 'toggle-tab-switcher') {
-    showOverlay();
-  } else if (command === 'next-tab' || command === 'prev-tab') {
-    const tabs = await browser.tabs.query({ currentWindow: true });
-    const current = tabs.findIndex(tab => tab.active);
-    const next = command === 'next-tab' 
-      ? (current + 1) % tabs.length 
-      : (current - 1 + tabs.length) % tabs.length;
-    
-    if (tabs[next]) {
-      browser.tabs.update(tabs[next].id, { active: true });
-    }
-  }
-});
+console.log('Tab Switcher background script loaded');
